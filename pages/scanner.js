@@ -1,98 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/router";
 import BottomNav from "../components/BottomNav";
 
 export default function Scanner() {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const readerRef = useRef(null);
-  const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState("");
+  const inputRef = useRef(null);
   const [manualCode, setManualCode] = useState("");
   const [loading, setLoading] = useState(false);
-  const [libLoaded, setLibLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const [scanned, setScanned] = useState("");
   const router = useRouter();
 
-  useEffect(() => {
-    // Charger ZXing dynamiquement
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js";
-    script.onload = () => setLibLoaded(true);
-    script.onerror = () => setError("Impossible de charger le scanner. Utilisez la saisie manuelle.");
-    document.head.appendChild(script);
-    return () => {
-      stopCamera();
-      document.head.removeChild(script);
-    };
-  }, []);
-
-  async function startCamera() {
-    setError("");
-    if (!libLoaded) {
-      setError("Scanner en cours de chargement, réessayez dans 2 secondes.");
-      return;
-    }
-    try {
-      const ZXing = window.ZXing;
-      const hints = new Map();
-      const formats = [
-        ZXing.BarcodeFormat.EAN_13,
-        ZXing.BarcodeFormat.EAN_8,
-        ZXing.BarcodeFormat.CODE_128,
-        ZXing.BarcodeFormat.UPC_A,
-        ZXing.BarcodeFormat.UPC_E,
-      ];
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-
-      const reader = new ZXing.BrowserMultiFormatReader(hints);
-      readerRef.current = reader;
-
-      const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-      // Préférer la caméra arrière
-      const device = devices.find(d =>
-        d.label.toLowerCase().includes("back") ||
-        d.label.toLowerCase().includes("arrière") ||
-        d.label.toLowerCase().includes("environment")
-      ) || devices[devices.length - 1] || devices[0];
-
-      if (!device) {
-        setError("Aucune caméra détectée. Utilisez la saisie manuelle.");
-        return;
-      }
-
-      setScanning(true);
-
-      await reader.decodeFromVideoDevice(
-        device.deviceId,
-        videoRef.current,
-        (result, err) => {
-          if (result) {
-            const code = result.getText();
-            stopCamera();
-            lookupBarcode(code);
-          }
-        }
-      );
-    } catch (e) {
-      setScanning(false);
-      if (e.name === "NotAllowedError") {
-        setError("Accès à la caméra refusé. Autorisez la caméra dans les réglages de votre navigateur.");
-      } else {
-        setError("Impossible d'accéder à la caméra. Utilisez la saisie manuelle.");
-      }
-    }
-  }
-
-  function stopCamera() {
-    if (readerRef.current) {
-      try { readerRef.current.reset(); } catch (_) {}
-      readerRef.current = null;
-    }
-    setScanning(false);
-  }
-
   async function lookupBarcode(code) {
+    if (!code || loading) return;
     setLoading(true);
+    setError("");
+    setScanned(code);
     try {
       const res = await fetch(`/api/scan?code=${encodeURIComponent(code)}`);
       if (res.ok) {
@@ -102,14 +24,70 @@ export default function Scanner() {
         router.push(`/soumettre?barcode=${encodeURIComponent(code)}`);
       }
     } catch {
-      setError("Erreur de connexion.");
+      setError("Erreur de connexion. Vérifiez votre réseau.");
       setLoading(false);
     }
   }
 
+  async function handleImageCapture(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    setError("");
+
+    try {
+      const imageBitmap = await createImageBitmap(file);
+      const canvas = document.createElement("canvas");
+      canvas.width = imageBitmap.width;
+      canvas.height = imageBitmap.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(imageBitmap, 0, 0);
+
+      // Essayer BarcodeDetector natif (Chrome Android)
+      if ("BarcodeDetector" in window) {
+        const detector = new window.BarcodeDetector({
+          formats: ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"]
+        });
+        const barcodes = await detector.detect(imageBitmap);
+        if (barcodes.length > 0) {
+          await lookupBarcode(barcodes[0].rawValue);
+          return;
+        }
+      }
+
+      // Fallback ZXing pour iPhone Safari
+      await new Promise((resolve, reject) => {
+        if (window.ZXing) { resolve(); return; }
+        const s = document.createElement("script");
+        s.src = "https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js";
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+
+      const dataUrl = canvas.toDataURL("image/jpeg");
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise(r => { img.onload = r; });
+
+      const reader = new window.ZXing.BrowserMultiFormatReader();
+      const result = await reader.decodeFromImageElement(img);
+      if (result) {
+        await lookupBarcode(result.getText());
+        return;
+      }
+
+      setLoading(false);
+      setError("Code-barres non détecté. Réessayez en vous rapprochant, bien cadré et éclairé.");
+    } catch {
+      setLoading(false);
+      setError("Code-barres non détecté. Réessayez ou utilisez la saisie manuelle.");
+    }
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
   async function handleManual(e) {
     e.preventDefault();
-    if (!manualCode.trim()) return;
     await lookupBarcode(manualCode.trim());
   }
 
@@ -122,74 +100,53 @@ export default function Scanner() {
       </nav>
 
       <div className="page-body">
-        {error && <div className="alert alert-warn" style={{ marginBottom: 16 }}>{error}</div>}
+
+        {error && (
+          <div className="alert alert-warn" style={{ marginBottom: 16 }}>
+            <span>⚠️</span>
+            <p>{error}</p>
+          </div>
+        )}
 
         {loading ? (
-          <div>
+          <div style={{ textAlign: "center", padding: "40px 0" }}>
             <div className="spinner" />
-            <p style={{ textAlign: "center", color: "var(--gray)" }}>Recherche en cours…</p>
+            <p style={{ color: "var(--gray)", marginTop: 8 }}>
+              {scanned ? `Code : ${scanned} — recherche…` : "Analyse en cours…"}
+            </p>
           </div>
         ) : (
           <>
-            {/* Zone scanner */}
+            {/* Zone scanner — ouvre la caméra native */}
             <div
               className="scanner-area"
-              onClick={!scanning ? startCamera : undefined}
-              style={{ cursor: scanning ? "default" : "pointer" }}
+              onClick={() => inputRef.current?.click()}
+              style={{ cursor: "pointer" }}
             >
-              <video
-                ref={videoRef}
-                muted
-                playsInline
-                style={{
-                  position: "absolute", inset: 0,
-                  width: "100%", height: "100%",
-                  objectFit: "cover", borderRadius: 14,
-                  display: scanning ? "block" : "none"
-                }}
+              <span style={{ fontSize: 52, zIndex: 2 }}>📷</span>
+              <p style={{ color: "var(--green)", fontWeight: 600, fontSize: 15, zIndex: 2 }}>
+                Appuyer pour scanner
+              </p>
+              <p style={{ fontSize: 12, color: "var(--gray)", zIndex: 2 }}>
+                iPhone · Android · tous navigateurs
+              </p>
+              <input
+                ref={inputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleImageCapture}
+                style={{ display: "none" }}
               />
-              {scanning && (
-                <div className="scanner-overlay">
-                  <div style={{
-                    width: 200, height: 200,
-                    border: "2px solid white",
-                    borderRadius: 12,
-                    position: "relative"
-                  }}>
-                    <div className="scanner-line" />
-                    {/* Coins */}
-                    {[
-                      { top: -2, left: -2, borderTop: "4px solid #1D9E75", borderLeft: "4px solid #1D9E75" },
-                      { top: -2, right: -2, borderTop: "4px solid #1D9E75", borderRight: "4px solid #1D9E75" },
-                      { bottom: -2, left: -2, borderBottom: "4px solid #1D9E75", borderLeft: "4px solid #1D9E75" },
-                      { bottom: -2, right: -2, borderBottom: "4px solid #1D9E75", borderRight: "4px solid #1D9E75" },
-                    ].map((style, i) => (
-                      <div key={i} style={{ position: "absolute", width: 20, height: 20, borderRadius: 2, ...style }} />
-                    ))}
-                  </div>
-                  <p style={{ color: "white", fontSize: 12, marginTop: 12, background: "rgba(0,0,0,0.5)", padding: "4px 10px", borderRadius: 20 }}>
-                    Centrez le code-barres
-                  </p>
-                </div>
-              )}
-              {!scanning && (
-                <>
-                  <span style={{ fontSize: 48, zIndex: 2 }}>📷</span>
-                  <p style={{ color: "var(--green)", fontWeight: 600, zIndex: 2 }}>
-                    {libLoaded ? "Appuyer pour scanner" : "Chargement…"}
-                  </p>
-                  <p style={{ fontSize: 12, color: "var(--gray)", zIndex: 2 }}>
-                    Compatible iPhone et Android
-                  </p>
-                </>
-              )}
             </div>
 
-            {scanning && (
-              <button className="btn btn-outline" style={{ marginBottom: 16 }} onClick={stopCamera}>
-                Arrêter la caméra
-              </button>
-            )}
+            <div className="alert alert-info" style={{ marginBottom: 20 }}>
+              <span>💡</span>
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 2 }}>Comment scanner</p>
+                <p style={{ fontSize: 12 }}>Appuyez sur la zone → la caméra s'ouvre → photographiez le code-barres → l'app trouve le jouet automatiquement.</p>
+              </div>
+            </div>
 
             {/* Saisie manuelle */}
             <p className="section-title">Ou saisir le code manuellement</p>
@@ -203,18 +160,14 @@ export default function Scanner() {
                 onChange={e => setManualCode(e.target.value)}
                 inputMode="numeric"
               />
-              <button className="btn btn-primary" type="submit">
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={!manualCode.trim()}
+              >
                 Rechercher ce code
               </button>
             </form>
-
-            <div className="alert alert-info" style={{ marginTop: 16 }}>
-              <span>ℹ️</span>
-              <div>
-                <p style={{ fontWeight: 600, marginBottom: 2 }}>Compatibilité</p>
-                <p>Le scan fonctionne sur iPhone (Safari) et Android (Chrome). Autorisez l'accès à la caméra quand le navigateur le demande.</p>
-              </div>
-            </div>
           </>
         )}
       </div>
