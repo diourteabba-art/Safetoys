@@ -1,5 +1,5 @@
 // pages/api/submit.js
-import { submitToy } from '../../lib/supabase';
+const { submitToy } = require('../../lib/supabase');
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Méthode non autorisée' });
