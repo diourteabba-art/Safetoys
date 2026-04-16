@@ -1,247 +1,165 @@
 // pages/jouet/[id].js
-// Fiche produit avec image, RAPEX check, ECHA/REACH, et sauvegarde historique
-
-import { useEffect } from "react";
-import { useRouter } from "next/router";
-import BottomNav from "../../components/BottomNav";
-import { scoreLabel } from "../../components/ToyCard";
-import { saveToHistory } from "../historique";
+import { useRouter } from 'next/router';
+import { useEffect } from 'react';
+import BottomNav from '../../components/BottomNav';
+import { saveToHistory } from '../historique';
 
 export async function getServerSideProps({ params }) {
   const { id } = params;
   try {
     const res = await fetch(
-      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${encodeURIComponent(process.env.AIRTABLE_TABLE_NAME || "jouets")}/${id}`,
-      { headers: { Authorization: `Bearer ${process.env.AIRTABLE_TOKEN}` } }
+      `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/produit/${id}`
     );
     if (!res.ok) return { notFound: true };
-    const record = await res.json();
-    const f = record.fields;
-    const toy = {
-      id: record.id,
-      name: f["Nom du jouet"] || "",
-      barcode: String(f["Code-barres (EAN)"] || ""),
-      brand: f["Marque"] || "",
-      category: f["Catégorie"] || "",
-      age: f["Tranche d'âge"] || "",
-      score: f["Score"] || "?",
-      substances: f["Substances détectées"] || "Non renseigné",
-      danger: f["Niveau de danger"] || "Non renseigné",
-      link: f["Lien produit"] || "",
-      status: f["Statut"] || "",
-      alternative: f["Alternative recommandée"] || "",
-      source: f["Source / Justification"] || "",
-      imageUrl: f["Image URL"] || "",
-    };
-
-    // Vérifier si le jouet est dans les alertes RAPEX
-    let rapexAlert = null;
-    try {
-      const rapexRes = await fetch(
-        `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/rapex?keyword=${encodeURIComponent(toy.name)}`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      const rapexData = await rapexRes.json();
-      if (rapexData.alerts?.length > 0) {
-        rapexAlert = rapexData.alerts[0];
-      }
-    } catch (_) {}
-
-    // Vérifier les substances sur ECHA/REACH
-    const substancesList = toy.substances.split(",").map(s => s.trim()).filter(Boolean);
-    let echaWarnings = [];
-    for (const sub of substancesList.slice(0, 3)) {
-      try {
-        const echaRes = await fetch(
-          `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/substances?name=${encodeURIComponent(sub)}`,
-          { signal: AbortSignal.timeout(3000) }
-        );
-        const echaData = await echaRes.json();
-        if (echaData.found) echaWarnings.push(...echaData.results);
-      } catch (_) {}
-    }
-
-    return { props: { toy, rapexAlert, echaWarnings } };
+    const toy = await res.json();
+    return { props: { toy } };
   } catch { return { notFound: true }; }
 }
 
-function DangerDot({ level }) {
-  const cls = level === "Élevé" ? "dot-red" : level === "Modéré" ? "dot-orange" : "dot-green";
-  return <div className={`dot ${cls}`} />;
-}
+const SCORE_BG = { A: '#E1F5EE', B: '#F0F8E8', C: '#FAEEDA', D: '#FCEBEB' };
+const SCORE_LABEL = { A: 'Sûr', B: 'Vigilance légère', C: 'Modéré', D: 'Danger élevé' };
+const METHODE_LABEL = {
+  declaration_fabricant: 'Déclaration fabricant',
+  base_publique: 'Base publique',
+  test_laboratoire: 'Test laboratoire',
+  estimation: 'Estimation',
+};
+const FIABILITE_STARS = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
-export default function JouetPage({ toy, rapexAlert, echaWarnings }) {
+export default function JouetPage({ toy }) {
   const router = useRouter();
-  const substances = toy.substances.split(",").map(s => s.trim()).filter(Boolean);
-  const isOk = toy.substances.toLowerCase().includes("aucune");
-  const score = toy.score;
-  const scoreBg = score==="D"?"#FCEBEB":score==="C"?"#FAEEDA":score==="B"?"#F0F8E8":"#E1F5EE";
+  const score = toy.score || '?';
+  const bg = SCORE_BG[score] || '#f0f0f0';
 
-  // Sauvegarder dans l'historique au chargement
-  useEffect(() => {
-    saveToHistory(toy);
-  }, [toy.id]);
+  useEffect(() => { saveToHistory(toy); }, [toy.id]);
 
   return (
     <>
       <nav className="top-nav">
-        <span style={{ fontSize: 20, cursor: "pointer" }} onClick={() => router.back()}>←</span>
+        <span style={{ fontSize: 20, cursor: 'pointer' }} onClick={() => router.back()}>←</span>
         <span className="nav-title">Fiche produit</span>
         <div style={{ width: 24 }} />
       </nav>
 
       <div className="page-body">
-
-        {/* Alerte RAPEX si applicable */}
-        {rapexAlert && (
-          <div className="alert alert-danger" style={{ marginBottom: 16 }}>
-            <span>🚨</span>
-            <div>
-              <p style={{ fontWeight: 700, marginBottom: 2 }}>Alerte Safety Gate EU !</p>
-              <p style={{ fontSize: 12 }}>{rapexAlert.description}</p>
-              <a href={rapexAlert.url} target="_blank" rel="noopener noreferrer"
-                style={{ fontSize: 11, color: "#501313", fontWeight: 600 }}>Voir l'alerte officielle ↗</a>
-            </div>
-          </div>
-        )}
-
-        {/* Image du produit */}
+        {/* Image */}
         {toy.imageUrl && (
-          <div style={{ background: "#f7fbf9", borderRadius: 16, marginBottom: 16,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            overflow: "hidden", border: "1px solid var(--border)" }}>
+          <div style={{ background: '#f7fbf9', borderRadius: 16, marginBottom: 16,
+            overflow: 'hidden', border: '1px solid var(--border)' }}>
             <img src={toy.imageUrl} alt={toy.name}
-              style={{ width: "100%", maxHeight: 220, objectFit: "contain" }} />
+              style={{ width: '100%', maxHeight: 220, objectFit: 'contain' }} />
           </div>
         )}
 
-        {/* Header produit */}
+        {/* Header */}
         <div className="card">
           <div className="card-row" style={{ marginBottom: 12 }}>
             <div style={{ flex: 1 }}>
               <p style={{ fontWeight: 700, fontSize: 18, marginBottom: 4 }}>{toy.name}</p>
-              <p style={{ fontSize: 13, color: "var(--gray)", marginBottom: 2 }}>{toy.brand}</p>
-              <p style={{ fontSize: 12, color: "var(--gray)" }}>{toy.category} · {toy.age}</p>
+              <p style={{ fontSize: 13, color: 'var(--gray)', marginBottom: 2 }}>{toy.brand}</p>
+              <p style={{ fontSize: 12, color: 'var(--gray)' }}>{toy.category} · {toy.age}</p>
             </div>
-            <div className={`score-badge score-${["A","B","C","D"].includes(score)?score:"q"}`}
+            <div className={`score-badge score-${['A','B','C','D'].includes(score) ? score : 'q'}`}
               style={{ width: 58, height: 58, fontSize: 28 }}>{score}</div>
           </div>
-          <div style={{ background: scoreBg, borderRadius: 12, padding: "10px 14px" }}>
-            <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{scoreLabel(score)}</p>
-            <p style={{ fontSize: 12, color: "var(--gray)" }}>Niveau de danger : {toy.danger}</p>
+          <div style={{ background: bg, borderRadius: 12, padding: '10px 14px' }}>
+            <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{SCORE_LABEL[score] || 'Non évalué'}</p>
+            <p style={{ fontSize: 12, color: 'var(--gray)' }}>Niveau de danger : {toy.danger}</p>
           </div>
         </div>
 
-        {/* Substances */}
-        <p className="section-title">Substances analysées</p>
-        <div className="card">
-          {isOk ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0" }}>
-              <div className="dot dot-green" />
-              <p style={{ fontSize: 14 }}>Aucune substance préoccupante détectée</p>
-            </div>
-          ) : (
-            substances.map((s, i) => {
-              const isRed = ["PFAS","Plomb","Cadmium","DEHP","BPA","Borax","azoïque","bromé"].some(k => s.toLowerCase().includes(k.toLowerCase()));
-              // Chercher info ECHA
-              const echaMatch = echaWarnings.find(w => w.name.toLowerCase().includes(s.toLowerCase().split(" ")[0]));
-              return (
-                <div key={i} className="substance-row">
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, fontWeight: 500 }}>{s}</p>
-                    {echaMatch && (
-                      <p style={{ fontSize: 11, color: isRed ? "#A32D2D" : "#854F0B", marginTop: 2 }}>
-                        {echaMatch.category} · {echaMatch.danger?.substring(0, 60)}…
-                      </p>
-                    )}
-                    {echaMatch && (
-                      <span style={{ fontSize: 10, background: "#E6F1FB", color: "#185FA5",
-                        padding: "1px 6px", borderRadius: 10, fontWeight: 500 }}>
-                        Source : {echaMatch.source}
-                      </span>
-                    )}
-                  </div>
-                  <DangerDot level={isRed ? "Élevé" : "Modéré"} />
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* Sources ECHA/REACH */}
-        {echaWarnings.length > 0 && (
+        {/* Substances détaillées */}
+        {toy.substancesDetail?.length > 0 ? (
           <>
-            <p className="section-title">Références réglementaires</p>
+            <p className="section-title">Substances analysées</p>
             <div className="card">
-              {echaWarnings.slice(0, 3).map((w, i) => (
-                <div key={i} style={{ padding: "8px 0", borderBottom: i < echaWarnings.length-1 ? "1px solid var(--border)" : "none" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, background: "#E1F5EE", color: "#085041",
-                      padding: "1px 6px", borderRadius: 10, fontWeight: 600 }}>{w.source}</span>
-                    <span style={{ fontSize: 11, color: "var(--gray)" }}>{w.category}</span>
+              {toy.substancesDetail.map((s, i) => {
+                const isRed = ['PFAS','Phtalate','Plomb','Cadmium','BPA','Borax','azoïque','bromé','PFOS','PFOA']
+                  .some(k => s.nom.toLowerCase().includes(k.toLowerCase()));
+                return (
+                  <div key={i} className="substance-row">
+                    <div style={{ flex: 1 }}>
+                      <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{s.nom}</p>
+                      {s.famille && <p style={{ fontSize: 11, color: 'var(--gray)' }}>{s.famille}</p>}
+                      {s.concentration && (
+                        <p style={{ fontSize: 11, color: isRed ? '#A32D2D' : '#633806' }}>
+                          Concentration : {s.concentration} {s.unite}
+                        </p>
+                      )}
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                        {s.methode && (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                            background: '#E6F1FB', color: '#185FA5' }}>
+                            {METHODE_LABEL[s.methode] || s.methode}
+                          </span>
+                        )}
+                        {s.fiabilite > 0 && (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                            background: '#E1F5EE', color: '#085041' }}>
+                            {FIABILITE_STARS(s.fiabilite)} {s.source}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className={`dot ${isRed ? 'dot-red' : 'dot-orange'}`} />
                   </div>
-                  <p style={{ fontSize: 12, fontWeight: 500, marginBottom: 2 }}>{w.name}</p>
-                  {w.limit && <p style={{ fontSize: 11, color: "var(--gray)" }}>Limite : {w.limit}</p>}
-                  <a href={w.sourceUrl} target="_blank" rel="noopener noreferrer"
-                    style={{ fontSize: 10, color: "#185FA5" }}>Voir sur {w.source} ↗</a>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
-        )}
-
-        {/* Alternative */}
-        {toy.alternative && (
+        ) : (
           <>
-            <p className="section-title">Alternative recommandée</p>
-            <div className="card" style={{ background: "var(--green-light)", border: "1px solid var(--green-mid)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 24 }}>✅</span>
-                <div>
-                  <p style={{ fontWeight: 600, fontSize: 14, color: "var(--green-dark)" }}>{toy.alternative}</p>
-                  <p style={{ fontSize: 12, color: "var(--green-dark)", opacity: 0.8 }}>Option plus sûre recommandée</p>
-                </div>
+            <p className="section-title">Substances analysées</p>
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+                <div className="dot dot-green" />
+                <p style={{ fontSize: 14 }}>Aucune substance préoccupante détectée</p>
               </div>
             </div>
           </>
         )}
 
-        {/* Infos produit */}
+        {/* Infos */}
         <p className="section-title">Informations</p>
         <div className="card">
           {[
-            { label: "Marque", val: toy.brand },
-            { label: "Catégorie", val: toy.category },
+            { label: 'Marque', val: toy.brand },
+            { label: 'Catégorie', val: toy.category },
             { label: "Tranche d'âge", val: toy.age },
-            { label: "Code-barres", val: toy.barcode || "Non renseigné" },
-            { label: "Statut", val: toy.status },
-            { label: "Source", val: toy.source },
+            { label: 'Code-barres', val: toy.barcode || 'Non renseigné' },
+            { label: 'Statut', val: toy.status === 'verifie' ? '✅ Vérifié' : '⏳ En attente' },
           ].map((row, i) => (
             <div key={i} className="substance-row">
-              <p style={{ fontSize: 12, color: "var(--gray)" }}>{row.label}</p>
-              <p style={{ fontSize: 13, fontWeight: 500, textAlign: "right", maxWidth: "60%" }}>{row.val}</p>
+              <p style={{ fontSize: 12, color: 'var(--gray)' }}>{row.label}</p>
+              <p style={{ fontSize: 13, fontWeight: 500, textAlign: 'right', maxWidth: '60%' }}>{row.val}</p>
             </div>
           ))}
         </div>
 
-        {toy.danger === "Élevé" && (
+        {toy.danger === 'Élevé' && (
           <div className="alert alert-danger">
             <span>⚠️</span>
             <div>
               <p style={{ fontWeight: 700, marginBottom: 2 }}>Produit déconseillé</p>
-              <p>Ce jouet présente des substances dangereuses dépassant les seuils recommandés.</p>
+              <p>Ce jouet présente des substances dangereuses. Consultez un professionnel de santé si votre enfant y a été exposé.</p>
             </div>
           </div>
         )}
 
+        {/* Disclaimer */}
+        <div style={{ background: 'var(--light-bg)', borderRadius: 12, padding: 12, marginTop: 16 }}>
+          <p style={{ fontSize: 11, color: 'var(--gray)', lineHeight: 1.5 }}>
+            Les informations fournies par SafeToys sont à titre indicatif et ne remplacent pas les tests de laboratoire officiels. Les scores sont calculés sur la base des données disponibles.
+          </p>
+        </div>
+
         {toy.link && (
           <a href={toy.link} target="_blank" rel="noopener noreferrer"
-            className="btn btn-outline" style={{ textDecoration: "none", marginTop: 8 }}>
+            className="btn btn-outline" style={{ textDecoration: 'none', marginTop: 12, display: 'block' }}>
             Voir le produit officiel ↗
           </a>
         )}
       </div>
-
       <BottomNav />
     </>
   );
