@@ -1,5 +1,5 @@
 // pages/api/scan.js
-import { searchByBarcode } from '../../lib/supabase';
+const { searchByBarcode } = require('../../lib/supabase');
 
 export default async function handler(req, res) {
   const { code } = req.query;
