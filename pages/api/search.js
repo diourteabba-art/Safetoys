@@ -1,5 +1,5 @@
 // pages/api/search.js
-import { searchByName } from '../../lib/supabase';
+const { searchByName } = require('../../lib/supabase');
 
 export default async function handler(req, res) {
   const { q } = req.query;
