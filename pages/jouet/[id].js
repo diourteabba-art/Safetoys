@@ -1,12 +1,17 @@
+// pages/jouet/[id].js
+// Fiche produit avec image, RAPEX check, ECHA/REACH, et sauvegarde historique
+
+import { useEffect } from "react";
 import { useRouter } from "next/router";
 import BottomNav from "../../components/BottomNav";
-import ToyCard, { scoreLabel } from "../../components/ToyCard";
+import { scoreLabel } from "../../components/ToyCard";
+import { saveToHistory } from "../historique";
 
 export async function getServerSideProps({ params }) {
   const { id } = params;
   try {
     const res = await fetch(
-      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${encodeURIComponent(process.env.AIRTABLE_TABLE_NAME || "Table 1")}/${id}`,
+      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${encodeURIComponent(process.env.AIRTABLE_TABLE_NAME || "jouets")}/${id}`,
       { headers: { Authorization: `Bearer ${process.env.AIRTABLE_TOKEN}` } }
     );
     if (!res.ok) return { notFound: true };
@@ -15,7 +20,7 @@ export async function getServerSideProps({ params }) {
     const toy = {
       id: record.id,
       name: f["Nom du jouet"] || "",
-      barcode: f["Code-barres (EAN)"] || "",
+      barcode: String(f["Code-barres (EAN)"] || ""),
       brand: f["Marque"] || "",
       category: f["Catégorie"] || "",
       age: f["Tranche d'âge"] || "",
@@ -26,11 +31,38 @@ export async function getServerSideProps({ params }) {
       status: f["Statut"] || "",
       alternative: f["Alternative recommandée"] || "",
       source: f["Source / Justification"] || "",
+      imageUrl: f["Image URL"] || "",
     };
-    return { props: { toy } };
-  } catch {
-    return { notFound: true };
-  }
+
+    // Vérifier si le jouet est dans les alertes RAPEX
+    let rapexAlert = null;
+    try {
+      const rapexRes = await fetch(
+        `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/rapex?keyword=${encodeURIComponent(toy.name)}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const rapexData = await rapexRes.json();
+      if (rapexData.alerts?.length > 0) {
+        rapexAlert = rapexData.alerts[0];
+      }
+    } catch (_) {}
+
+    // Vérifier les substances sur ECHA/REACH
+    const substancesList = toy.substances.split(",").map(s => s.trim()).filter(Boolean);
+    let echaWarnings = [];
+    for (const sub of substancesList.slice(0, 3)) {
+      try {
+        const echaRes = await fetch(
+          `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/substances?name=${encodeURIComponent(sub)}`,
+          { signal: AbortSignal.timeout(3000) }
+        );
+        const echaData = await echaRes.json();
+        if (echaData.found) echaWarnings.push(...echaData.results);
+      } catch (_) {}
+    }
+
+    return { props: { toy, rapexAlert, echaWarnings } };
+  } catch { return { notFound: true }; }
 }
 
 function DangerDot({ level }) {
@@ -38,14 +70,17 @@ function DangerDot({ level }) {
   return <div className={`dot ${cls}`} />;
 }
 
-function ScoreBg(score) {
-  return score === "D" ? "#FCEBEB" : score === "C" ? "#FAEEDA" : score === "B" ? "#F0F8E8" : "#E1F5EE";
-}
-
-export default function JouetPage({ toy }) {
+export default function JouetPage({ toy, rapexAlert, echaWarnings }) {
   const router = useRouter();
   const substances = toy.substances.split(",").map(s => s.trim()).filter(Boolean);
   const isOk = toy.substances.toLowerCase().includes("aucune");
+  const score = toy.score;
+  const scoreBg = score==="D"?"#FCEBEB":score==="C"?"#FAEEDA":score==="B"?"#F0F8E8":"#E1F5EE";
+
+  // Sauvegarder dans l'historique au chargement
+  useEffect(() => {
+    saveToHistory(toy);
+  }, [toy.id]);
 
   return (
     <>
@@ -56,6 +91,30 @@ export default function JouetPage({ toy }) {
       </nav>
 
       <div className="page-body">
+
+        {/* Alerte RAPEX si applicable */}
+        {rapexAlert && (
+          <div className="alert alert-danger" style={{ marginBottom: 16 }}>
+            <span>🚨</span>
+            <div>
+              <p style={{ fontWeight: 700, marginBottom: 2 }}>Alerte Safety Gate EU !</p>
+              <p style={{ fontSize: 12 }}>{rapexAlert.description}</p>
+              <a href={rapexAlert.url} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 11, color: "#501313", fontWeight: 600 }}>Voir l'alerte officielle ↗</a>
+            </div>
+          </div>
+        )}
+
+        {/* Image du produit */}
+        {toy.imageUrl && (
+          <div style={{ background: "#f7fbf9", borderRadius: 16, marginBottom: 16,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            overflow: "hidden", border: "1px solid var(--border)" }}>
+            <img src={toy.imageUrl} alt={toy.name}
+              style={{ width: "100%", maxHeight: 220, objectFit: "contain" }} />
+          </div>
+        )}
+
         {/* Header produit */}
         <div className="card">
           <div className="card-row" style={{ marginBottom: 12 }}>
@@ -64,15 +123,11 @@ export default function JouetPage({ toy }) {
               <p style={{ fontSize: 13, color: "var(--gray)", marginBottom: 2 }}>{toy.brand}</p>
               <p style={{ fontSize: 12, color: "var(--gray)" }}>{toy.category} · {toy.age}</p>
             </div>
-            <div className={`score-badge score-${["A","B","C","D"].includes(toy.score) ? toy.score : "q"}`}
-              style={{ width: 58, height: 58, fontSize: 28 }}>
-              {toy.score}
-            </div>
+            <div className={`score-badge score-${["A","B","C","D"].includes(score)?score:"q"}`}
+              style={{ width: 58, height: 58, fontSize: 28 }}>{score}</div>
           </div>
-
-          {/* Score bar */}
-          <div style={{ background: ScoreBg(toy.score), borderRadius: 12, padding: "10px 14px" }}>
-            <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{scoreLabel(toy.score)}</p>
+          <div style={{ background: scoreBg, borderRadius: 12, padding: "10px 14px" }}>
+            <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{scoreLabel(score)}</p>
             <p style={{ fontSize: 12, color: "var(--gray)" }}>Niveau de danger : {toy.danger}</p>
           </div>
         </div>
@@ -87,12 +142,24 @@ export default function JouetPage({ toy }) {
             </div>
           ) : (
             substances.map((s, i) => {
-              const isRed = ["PFAS", "Plomb", "Cadmium", "phtalates DEHP", "BPA"].some(k => s.toLowerCase().includes(k.toLowerCase()));
-              const isOrange = !isRed;
+              const isRed = ["PFAS","Plomb","Cadmium","DEHP","BPA","Borax","azoïque","bromé"].some(k => s.toLowerCase().includes(k.toLowerCase()));
+              // Chercher info ECHA
+              const echaMatch = echaWarnings.find(w => w.name.toLowerCase().includes(s.toLowerCase().split(" ")[0]));
               return (
                 <div key={i} className="substance-row">
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <p style={{ fontSize: 13, fontWeight: 500 }}>{s}</p>
+                    {echaMatch && (
+                      <p style={{ fontSize: 11, color: isRed ? "#A32D2D" : "#854F0B", marginTop: 2 }}>
+                        {echaMatch.category} · {echaMatch.danger?.substring(0, 60)}…
+                      </p>
+                    )}
+                    {echaMatch && (
+                      <span style={{ fontSize: 10, background: "#E6F1FB", color: "#185FA5",
+                        padding: "1px 6px", borderRadius: 10, fontWeight: 500 }}>
+                        Source : {echaMatch.source}
+                      </span>
+                    )}
                   </div>
                   <DangerDot level={isRed ? "Élevé" : "Modéré"} />
                 </div>
@@ -100,6 +167,28 @@ export default function JouetPage({ toy }) {
             })
           )}
         </div>
+
+        {/* Sources ECHA/REACH */}
+        {echaWarnings.length > 0 && (
+          <>
+            <p className="section-title">Références réglementaires</p>
+            <div className="card">
+              {echaWarnings.slice(0, 3).map((w, i) => (
+                <div key={i} style={{ padding: "8px 0", borderBottom: i < echaWarnings.length-1 ? "1px solid var(--border)" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, background: "#E1F5EE", color: "#085041",
+                      padding: "1px 6px", borderRadius: 10, fontWeight: 600 }}>{w.source}</span>
+                    <span style={{ fontSize: 11, color: "var(--gray)" }}>{w.category}</span>
+                  </div>
+                  <p style={{ fontSize: 12, fontWeight: 500, marginBottom: 2 }}>{w.name}</p>
+                  {w.limit && <p style={{ fontSize: 11, color: "var(--gray)" }}>Limite : {w.limit}</p>}
+                  <a href={w.sourceUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: 10, color: "#185FA5" }}>Voir sur {w.source} ↗</a>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         {/* Alternative */}
         {toy.alternative && (
@@ -135,7 +224,6 @@ export default function JouetPage({ toy }) {
           ))}
         </div>
 
-        {/* Alertes PFAS/RAPEX */}
         {toy.danger === "Élevé" && (
           <div className="alert alert-danger">
             <span>⚠️</span>
