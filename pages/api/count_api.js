@@ -1,5 +1,5 @@
 // pages/api/count.js
-import { countProduits } from '../../lib/supabase';
+const { countProduits } = require('../../lib/supabase');
 
 export default async function handler(req, res) {
   try {
