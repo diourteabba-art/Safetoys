@@ -1,6 +1,6 @@
 # SafeToys — MVP
 
-Application mobile (PWA) pour vérifier la sécurité des jouets pour enfants.
+Application mobile (PWA) pour vérifier la sécurité des jouets pour enfants,
 
 ## 🚀 Déploiement en 5 étapes
 
