@@ -11,24 +11,18 @@ export default async function handler(req, res) {
     "Content-Type": "application/json",
   };
 
-  // On construit les champs prudemment — uniquement ceux qui existent dans Airtable
   const fields = {
     "Nom du jouet": String(name).substring(0, 255),
     "Marque": String(brand).substring(0, 255),
-    "Statut": "En attente",
-    "Source / Justification": `Communauté${comment ? " — " + String(comment).substring(0, 500) : ""}`,
+    "Source / Justification": `Communauté${comment ? " — " + String(comment).substring(0, 400) : ""}${barcode ? " | Code: " + barcode : ""}`,
   };
 
-  // Champs optionnels — ajoutés seulement si renseignés
   if (category && category.trim()) fields["Catégorie"] = String(category);
   if (age && age.trim()) fields["Tranche d'âge"] = String(age);
   if (imageUrl && imageUrl.startsWith("http")) fields["Image URL"] = String(imageUrl);
 
-  // Code-barres : Airtable attend un nombre pour les colonnes Number
-  // On l'envoie comme texte dans le commentaire pour éviter les erreurs de type
-  if (barcode && barcode.trim()) {
-    fields["Source / Justification"] += ` | Code: ${barcode}`;
-  }
+  // ⚠️ On n'envoie plus "Statut" ici pour éviter l'erreur de permission
+  // Ajoute manuellement les options dans Airtable si tu veux le statut
 
   try {
     const airtableRes = await fetch(BASE_URL, {
@@ -40,7 +34,6 @@ export default async function handler(req, res) {
     const data = await airtableRes.json();
 
     if (!airtableRes.ok) {
-      // Log l'erreur complète pour debug
       console.error("Airtable error:", JSON.stringify(data));
       return res.status(500).json({
         error: "Erreur Airtable",
