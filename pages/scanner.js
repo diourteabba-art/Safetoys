@@ -196,26 +196,53 @@ export default function Scanner() {
 
   async function handleManual(e) { e.preventDefault(); await processBarcode(manualCode.trim()); }
 
-  async function handleConfirm() {
-    setSubmitting(true); setSubmitMsg("");
-    try {
-      const res = await fetch("/api/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: offProduct.name, brand: offProduct.brand,
-          category: editForm.category || offProduct.category,
-          age: editForm.age, barcode: scannedCode,
-          comment: `Confirmé via Open Products Facts. Image: ${offProduct.imageUrl}. Matériaux: ${offProduct.materials || "non renseigné"}`,
-        }),
-      });
-      if (res.ok) {
-        setSubmitMsg("✅ Merci ! Ce jouet a été ajouté pour vérification.");
-        setTimeout(() => reset(), 3000);
-      } else { setSubmitMsg("❌ Erreur. Réessayez."); }
-    } catch { setSubmitMsg("❌ Erreur de connexion."); }
-    setSubmitting(false);
+  // Remplace uniquement la fonction handleConfirm et la section affichage
+// dans pages/scanner.js — bloc CONFIRMATION
+
+// ─── Nouvelle fonction handleConfirm ────────────────────────
+async function handleConfirm() {
+  if (!offProduct) return;
+  setSubmitting(true); setSubmitMsg("");
+
+  try {
+    const res = await fetch("/api/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: offProduct.name,
+        brand: offProduct.brand,
+        category: editForm.category || offProduct.category,
+        age: editForm.age,
+        barcode: scannedCode,
+        imageUrl: offProduct.imageUrl,
+        // On envoie les matériaux connus pour la notation automatique
+        materials: offProduct.materials || [],
+        comment: `Source: Open Products Facts. Quantité: ${offProduct.quantity || "NC"}`,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      // Afficher le score calculé automatiquement
+      let msg = "✅ Jouet ajouté pour vérification !";
+      if (data.score && data.score !== "?") {
+        const scoreLabels = { A: "Sûr", B: "Vigilance légère", C: "Modéré", D: "Danger élevé" };
+        msg += ` Score provisoire : ${data.score} (${scoreLabels[data.score]})`;
+      }
+      if (data.rapexAlerte) msg += " ⚠️ Alerte RAPEX détectée !";
+      if (data.scoreProvisoire) msg += " — En attente de validation.";
+
+      setSubmitMsg(msg);
+      setTimeout(() => reset(), 4000);
+    } else {
+      setSubmitMsg("❌ Erreur lors de l'ajout. Réessayez.");
+    }
+  } catch {
+    setSubmitMsg("❌ Erreur de connexion.");
   }
+  setSubmitting(false);
+}
 
   function reset() {
     stopQuagga();
