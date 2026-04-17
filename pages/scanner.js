@@ -1,5 +1,5 @@
 // pages/scanner.js
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import BottomNav from "../components/BottomNav";
 
@@ -20,6 +20,15 @@ export default function Scanner() {
   const [submitting, setSubmitting] = useState(false);
   const [submitMsg, setSubmitMsg] = useState("");
   const router = useRouter();
+
+  // Charger Quagga au montage pour accélérer le scan
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.Quagga) {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js";
+      document.head.appendChild(script);
+    }
+  });
 
   async function processBarcode(code) {
     if (!code) return;
