@@ -69,7 +69,9 @@ export async function getServerSideProps({ params }) {
       fiabilite: ps.sources ? ps.sources.fiabilite : 0,
     }));
 
-    const score = scoreData ? scoreData.grade : (data.score || 'A');
+    const score = data.analyse_mode === 'exact' && scoreData?.grade 
+  ? scoreData.grade 
+  : (data.score || 'A');
 
     const toy = {
       id: String(data.id),
