@@ -1,8 +1,6 @@
 // pages/jouet/[id].js
 import { useRouter } from 'next/router';
-import { useEffect } from 'react';
 import BottomNav from '../../components/BottomNav';
-import { saveToHistory } from '../historique';
 
 export async function getServerSideProps({ params }) {
   const { id } = params;
@@ -13,7 +11,7 @@ export async function getServerSideProps({ params }) {
       process.env.SUPABASE_ANON_KEY
     );
 
-    // Récupérer le produit avec ses substances
+    // Produit + substances exactes
     const { data, error } = await supabase
       .from('produits')
       .select(`
@@ -29,12 +27,26 @@ export async function getServerSideProps({ params }) {
 
     if (error || !data) return { notFound: true };
 
-    // Récupérer le score enrichi depuis product_score_labels
+    // Score enrichi
     const { data: scoreData } = await supabase
       .from('product_score_labels')
-      .select('grade, final_score, interpretation, disclaimer, confidence_moyen, nb_substances')
+      .select('grade, final_score, interpretation, disclaimer, confidence_moyen')
       .eq('produit_id', parseInt(id))
       .single();
+
+    // Risques probabilistes si mode probabiliste
+    let risquesProbables = [];
+    if (data.analyse_mode !== 'exact' && data.categorie) {
+      const { data: risques } = await supabase
+        .from('category_risks')
+        .select(`
+          probabilite, description, source,
+          substances(nom, famille, classification_clp)
+        `)
+        .eq('categorie', data.categorie)
+        .order('probabilite', { ascending: false });
+      risquesProbables = risques || [];
+    }
 
     const substances = (data.product_substances || []).map(ps => ({
       nom: ps.substances?.nom || '',
@@ -52,7 +64,6 @@ export async function getServerSideProps({ params }) {
     }));
 
     const score = scoreData?.grade || data.score || '?';
-    const danger = score === 'D' ? 'Élevé' : score === 'C' ? 'Modéré' : score === 'B' ? 'Faible' : 'Faible';
 
     const toy = {
       id: String(data.id),
@@ -62,6 +73,7 @@ export async function getServerSideProps({ params }) {
       age: data.age_min ? `${data.age_min}${data.age_max ? '-'+data.age_max : '+'} ans` : '',
       barcode: data.ean || '',
       score,
+      analyseMode: data.analyse_mode || 'probabiliste',
       finalScore: scoreData?.final_score || null,
       interpretation: scoreData?.interpretation || null,
       disclaimer: scoreData?.disclaimer || null,
@@ -69,11 +81,19 @@ export async function getServerSideProps({ params }) {
       imageUrl: data.image_url || '',
       link: data.lien_officiel || '',
       status: data.statut || '',
-      danger,
+      danger: score === 'D' ? 'Élevé' : score === 'C' ? 'Modéré' : score === 'B' ? 'Faible' : 'Faible',
       substances: substances.length > 0
         ? substances.map(s => s.nom).join(', ')
-        : 'Aucune substance réglementée identifiée',
+        : 'Aucune substance confirmée',
       substancesDetail: substances,
+      risquesProbables: risquesProbables.map(r => ({
+        nom: r.substances?.nom || '',
+        famille: r.substances?.famille || '',
+        classification: r.substances?.classification_clp || '',
+        probabilite: r.probabilite,
+        description: r.description,
+        source: r.source,
+      })),
     };
 
     return { props: { toy } };
@@ -85,6 +105,9 @@ export async function getServerSideProps({ params }) {
 
 const SCORE_BG  = { A: '#E1F5EE', B: '#F0F8E8', C: '#FAEEDA', D: '#FCEBEB' };
 const SCORE_COL = { A: '#085041', B: '#27500A', C: '#633806', D: '#501313' };
+const PROB_LABEL = { 5: 'Très probable', 4: 'Probable', 3: 'Possible', 2: 'Peu probable', 1: 'Rare' };
+const PROB_COLOR = { 5: '#A32D2D', 4: '#BA7517', 3: '#633806', 2: '#27500A', 1: '#085041' };
+const PROB_BG    = { 5: '#FCEBEB', 4: '#FAEEDA', 3: '#FFF8EC', 2: '#F0F8E8', 1: '#E1F5EE' };
 const METHODE_LABEL = {
   declaration_fabricant: 'Déclaration fabricant',
   base_publique: 'Base publique',
@@ -114,8 +137,7 @@ export default function JouetPage({ toy }) {
   const score = toy.score || '?';
   const bg  = SCORE_BG[score]  || '#f0f0f0';
   const col = SCORE_COL[score] || '#888';
-
-  useEffect(() => { saveToHistory(toy); }, [toy.id]);
+  const isExact = toy.analyseMode === 'exact';
 
   return (
     <>
@@ -127,7 +149,6 @@ export default function JouetPage({ toy }) {
 
       <div className="page-body">
 
-        {/* Image */}
         {toy.imageUrl && (
           <div style={{ background: '#f7fbf9', borderRadius: 16, marginBottom: 16,
             overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -136,7 +157,7 @@ export default function JouetPage({ toy }) {
           </div>
         )}
 
-        {/* Header */}
+        {/* Header score */}
         <div className="card">
           <div className="card-row" style={{ marginBottom: 12 }}>
             <div style={{ flex: 1 }}>
@@ -148,26 +169,33 @@ export default function JouetPage({ toy }) {
               style={{ width: 58, height: 58, fontSize: 28 }}>{score}</div>
           </div>
 
-          {/* Score enrichi */}
-          <div style={{ background: bg, borderRadius: 12, padding: '12px 14px' }}>
-            {toy.finalScore && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <p style={{ fontWeight: 700, fontSize: 15, color: col }}>
-                  Score ECHA/REACH : {toy.finalScore}
-                </p>
-                <span style={{ fontSize: 10, background: col, color: 'white',
-                  padding: '2px 8px', borderRadius: 20 }}>
-                  {score}
-                </span>
-              </div>
-            )}
-            <p style={{ fontSize: 12, color: col, lineHeight: 1.5 }}>
-              {toy.interpretation || 'Analyse en cours'}
-            </p>
-            <ConfidenceBar value={toy.confidenceMoyen} />
+          {/* Badge mode d'analyse */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{
+              fontSize: 10, padding: '3px 10px', borderRadius: 20, fontWeight: 600,
+              background: isExact ? '#E1F5EE' : '#FAEEDA',
+              color: isExact ? '#085041' : '#633806'
+            }}>
+              {isExact ? '🔬 Données confirmées' : '📊 Estimation par catégorie'}
+            </span>
           </div>
 
-          {/* Disclaimer */}
+          <div style={{ background: bg, borderRadius: 12, padding: '12px 14px' }}>
+            {toy.finalScore && isExact && (
+              <p style={{ fontWeight: 700, fontSize: 14, color: col, marginBottom: 4 }}>
+                Score ECHA/REACH : {toy.finalScore}
+              </p>
+            )}
+            <p style={{ fontSize: 12, color: col, lineHeight: 1.5 }}>
+              {toy.interpretation || (
+                isExact
+                  ? 'Analyse basée sur les substances confirmées'
+                  : `Estimation basée sur les risques connus pour la catégorie "${toy.category}"`
+              )}
+            </p>
+            {isExact && <ConfidenceBar value={toy.confidenceMoyen} />}
+          </div>
+
           {toy.disclaimer && (
             <div style={{ marginTop: 10, padding: '8px 12px',
               background: 'var(--light-bg)', borderRadius: 8,
@@ -179,55 +207,92 @@ export default function JouetPage({ toy }) {
           )}
         </div>
 
-        {/* Substances */}
-        <p className="section-title">Substances analysées (ECHA/REACH)</p>
-        <div className="card">
-          {toy.substancesDetail?.length > 0 ? (
-            toy.substancesDetail.map((s, i) => {
-              const isRed = ['PFAS','Phtalate','Plomb','Cadmium','BPA','Borax','PFOS','PFOA','CMR']
-                .some(k => (s.nom + s.famille + s.classification).toLowerCase().includes(k.toLowerCase()));
-              return (
+        {/* Substances exactes (mode exact) */}
+        {isExact && (
+          <>
+            <p className="section-title">Substances analysées (ECHA/REACH)</p>
+            <div className="card">
+              {toy.substancesDetail?.length > 0 ? (
+                toy.substancesDetail.map((s, i) => {
+                  const isRed = ['PFAS','Phtalate','Plomb','Cadmium','BPA','PFOS','PFOA']
+                    .some(k => (s.nom + s.famille).toLowerCase().includes(k.toLowerCase()));
+                  return (
+                    <div key={i} className="substance-row">
+                      <div style={{ flex: 1 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{s.nom}</p>
+                        {s.famille && <p style={{ fontSize: 11, color: 'var(--gray)' }}>{s.famille}</p>}
+                        {s.concentration && (
+                          <p style={{ fontSize: 11, color: isRed ? '#A32D2D' : '#633806' }}>
+                            Concentration : {s.concentration} {s.unite}
+                          </p>
+                        )}
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                          {s.methode && (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                              background: '#E6F1FB', color: '#185FA5' }}>
+                              {METHODE_LABEL[s.methode] || s.methode}
+                            </span>
+                          )}
+                          {s.source && (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                              background: '#E1F5EE', color: '#085041' }}>
+                              {s.source}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className={`dot ${isRed ? 'dot-red' : 'dot-orange'}`} />
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+                  <div className="dot dot-green" />
+                  <p style={{ fontSize: 14 }}>Aucune substance réglementée identifiée</p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Risques probabilistes (mode probabiliste) */}
+        {!isExact && toy.risquesProbables?.length > 0 && (
+          <>
+            <p className="section-title">Risques probables pour cette catégorie</p>
+            <div className="alert alert-warn" style={{ marginBottom: 12 }}>
+              <span>📊</span>
+              <div>
+                <p style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
+                  Estimation basée sur les données RAPEX et études scientifiques
+                </p>
+                <p style={{ fontSize: 11, color: 'var(--gray)' }}>
+                  Aucune donnée spécifique disponible pour ce produit. 
+                  Les risques ci-dessous sont basés sur les jouets similaires de la catégorie "{toy.category}".
+                </p>
+              </div>
+            </div>
+            <div className="card">
+              {toy.risquesProbables.map((r, i) => (
                 <div key={i} className="substance-row">
                   <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{s.nom}</p>
-                    {s.famille && (
-                      <p style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 2 }}>
-                        {s.famille}{s.classification ? ` · ${s.classification}` : ''}
-                      </p>
-                    )}
-                    {s.concentration && (
-                      <p style={{ fontSize: 11, color: isRed ? '#A32D2D' : '#633806' }}>
-                        Concentration : {s.concentration} {s.unite}
-                      </p>
-                    )}
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-                      {s.methode && (
-                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
-                          background: '#E6F1FB', color: '#185FA5' }}>
-                          {METHODE_LABEL[s.methode] || s.methode}
-                        </span>
-                      )}
-                      {s.source && (
-                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
-                          background: '#E1F5EE', color: '#085041' }}>
-                          {s.source}
-                        </span>
-                      )}
-                    </div>
+                    <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{r.nom}</p>
+                    {r.famille && <p style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 4 }}>{r.famille}</p>}
+                    <p style={{ fontSize: 11, color: 'var(--gray)', lineHeight: 1.4 }}>{r.description}</p>
+                    <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, marginTop: 4,
+                      display: 'inline-block',
+                      background: PROB_BG[r.probabilite] || '#f0f0f0',
+                      color: PROB_COLOR[r.probabilite] || '#888' }}>
+                      {PROB_LABEL[r.probabilite] || 'Inconnu'} · Source : {r.source}
+                    </span>
                   </div>
-                  <div className={`dot ${isRed ? 'dot-red' : 'dot-orange'}`} />
+                  <div className={`dot ${r.probabilite >= 4 ? 'dot-red' : r.probabilite >= 3 ? 'dot-orange' : 'dot-green'}`} />
                 </div>
-              );
-            })
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
-              <div className="dot dot-green" />
-              <p style={{ fontSize: 14 }}>Aucune substance réglementée identifiée</p>
+              ))}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
-        {/* Infos */}
+        {/* Infos produit */}
         <p className="section-title">Informations</p>
         <div className="card">
           {[
@@ -236,6 +301,7 @@ export default function JouetPage({ toy }) {
             { label: "Tranche d'âge", val: toy.age },
             { label: 'Code-barres', val: toy.barcode || 'Non renseigné' },
             { label: 'Statut', val: toy.status === 'verifie' ? '✅ Vérifié' : '⏳ En attente' },
+            { label: 'Analyse', val: isExact ? '🔬 Données confirmées' : '📊 Estimation catégorie' },
           ].map((row, i) => (
             <div key={i} className="substance-row">
               <p style={{ fontSize: 12, color: 'var(--gray)' }}>{row.label}</p>
@@ -250,18 +316,18 @@ export default function JouetPage({ toy }) {
             <div>
               <p style={{ fontWeight: 700, marginBottom: 2 }}>Vigilance recommandée</p>
               <p style={{ fontSize: 12 }}>
-                Ce jouet présente des substances soumises à interdiction ou forte restriction réglementaire.
-                Consultez un professionnel de santé si votre enfant y a été exposé.
+                Ce jouet présente des substances soumises à interdiction ou forte restriction.
+                Consultez un professionnel si votre enfant y a été exposé.
               </p>
             </div>
           </div>
         )}
 
-        {/* Disclaimer légal global */}
         <div style={{ background: 'var(--light-bg)', borderRadius: 12, padding: 12, marginTop: 8 }}>
           <p style={{ fontSize: 11, color: 'var(--gray)', lineHeight: 1.5 }}>
-            Les informations SafeToys sont calculées selon les réglementations ECHA/REACH/EN 71 en vigueur
-            et ne remplacent pas un test de laboratoire accrédité. Score calculé le {new Date().toLocaleDateString('fr-FR')}.
+            {isExact
+              ? 'Score calculé selon ECHA/REACH/EN 71 sur données confirmées. Ne remplace pas un test de laboratoire accrédité.'
+              : 'Score estimé selon les risques connus pour cette catégorie de jouets (RAPEX, études scientifiques). Les informations sont à titre indicatif.'}
           </p>
         </div>
 
