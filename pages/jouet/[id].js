@@ -35,33 +35,28 @@ export async function getServerSideProps({ params }) {
       .single();
 
     // Risques probabilistes si mode probabiliste
-    let risquesProbables = [];
-    if (data.analyse_mode !== 'exact' && data.categorie) {
-      const { data: risques } = await supabase
-        .from('category_risks')
-        .select(`
-          probabilite, description, source,
-          substances(nom, famille, classification_clp)
-        `)
-        .eq('categorie', data.categorie)
-        .order('probabilite', { ascending: false });
-      risquesProbables = risques || [];
-    }
+let risquesProbables = [];
+if (data.analyse_mode !== 'exact' && data.categorie) {
+  const { data: risques } = await supabase
+    .from('category_risks')
+    .select(`
+      probabilite, description, source,
+      substance_id,
+      substances:substance_id(nom, famille, classification_clp)
+    `)
+    .eq('categorie', data.categorie)
+    .order('probabilite', { ascending: false });
+  risquesProbables = risques || [];
+}
 
-    const substances = (data.product_substances || []).map(ps => ({
-      nom: ps.substances?.nom || '',
-      famille: ps.substances?.famille || '',
-      cas: ps.substances?.cas_number || '',
-      classification: ps.substances?.classification_clp || '',
-      description: ps.substances?.description || '',
-      concentration: ps.concentration,
-      unite: ps.unite,
-      niveauConfiance: ps.niveau_confiance,
-      methode: ps.methode_acquisition,
-      source: ps.sources?.nom || '',
-      sourceUrl: ps.sources?.url || '',
-      fiabilite: ps.sources?.fiabilite || 0,
-    }));
+   risquesProbables: risquesProbables.map(r => ({
+  nom: r.substances?.nom || '',
+  famille: r.substances?.famille || '',
+  classification: r.substances?.classification_clp || '',
+  probabilite: r.probabilite,
+  description: r.description,
+  source: r.source,
+})),
 
     const score = scoreData?.grade || data.score || '?';
 
