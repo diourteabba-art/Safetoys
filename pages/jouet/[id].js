@@ -37,16 +37,34 @@ export async function getServerSideProps({ params }) {
     // Risques probabilistes si mode probabiliste
 let risquesProbables = [];
 if (data.analyse_mode !== 'exact' && data.categorie) {
+  // Requête 1 : récupérer les risques de la catégorie
   const { data: risques } = await supabase
     .from('category_risks')
-    .select(`
-      probabilite, description, source,
-      substance_id,
-      substances:substance_id(nom, famille, classification_clp)
-    `)
+    .select('probabilite, description, source, substance_id')
     .eq('categorie', data.categorie)
     .order('probabilite', { ascending: false });
-  risquesProbables = risques || [];
+
+  if (risques && risques.length > 0) {
+    // Requête 2 : récupérer les substances correspondantes
+    const substanceIds = risques.map(r => r.substance_id);
+    const { data: subs } = await supabase
+      .from('substances')
+      .select('id, nom, famille, classification_clp')
+      .in('id', substanceIds);
+
+    // Fusionner manuellement
+    risquesProbables = risques.map(r => {
+      const sub = subs?.find(s => s.id === r.substance_id);
+      return {
+        nom: sub?.nom || '',
+        famille: sub?.famille || '',
+        classification: sub?.classification_clp || '',
+        probabilite: r.probabilite,
+        description: r.description,
+        source: r.source,
+      };
+    });
+  }
 }
 
    risquesProbables: risquesProbables.map(r => ({
